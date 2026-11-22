@@ -41,7 +41,19 @@ namespace LinkPilot.Link
 
         public void Initialize()
         {
-            Firmware = Locked(() => LinkProtocol.ParseFirmware(Send(LinkProtocol.CmdFirmware)));
+            // A leftover report from an interrupted exchange can be mistaken for the firmware answer,
+            // so ask until two answers in a row agree.
+            Firmware = Locked(() =>
+            {
+                string last = LinkProtocol.ParseFirmware(Send(LinkProtocol.CmdFirmware));
+                for (int i = 0; i < 3; i++)
+                {
+                    string again = LinkProtocol.ParseFirmware(Send(LinkProtocol.CmdFirmware));
+                    if (again == last) break;
+                    last = again;
+                }
+                return last;
+            });
             _twoPageDeviceList = LinkProtocol.FirmwareSupportsTwoPageDeviceList(Firmware);
             EnterSoftwareMode();
         }

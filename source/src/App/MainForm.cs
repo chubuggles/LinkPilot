@@ -32,7 +32,7 @@ namespace LinkPilot.App
             _ctl = ctl;
             _exiting = exiting;
 
-            Text = "LinkPilot — iCUE LINK fan & pump control";
+            Text = "LinkPilot — iCUE LINK fan & pump control" + (ctl.IsSimulated ? " — DEMO (pretend hub)" : "");
             BackColor = Theme.Bg;
             ForeColor = Theme.Text;
             Font = Theme.Ui(9f);
@@ -61,10 +61,11 @@ namespace LinkPilot.App
                 BackColor = Theme.Card,
                 ForeColor = Theme.Text,
                 Font = Theme.Ui(9f, FontStyle.Bold),
-                AutoSize = true,
-                Padding = new Padding(Theme.S(10), Theme.S(4), Theme.S(10), Theme.S(4)),
+                AutoSize = false,
+                Size = new Size(Theme.S(118), Theme.S(34)),
                 Cursor = Cursors.Hand,
                 TextAlign = ContentAlignment.MiddleCenter,
+                UseVisualStyleBackColor = false,
             };
             _fullBlast.FlatAppearance.BorderColor = Theme.Line;
             _fullBlast.FlatAppearance.CheckedBackColor = Theme.Danger;
@@ -154,6 +155,7 @@ namespace LinkPilot.App
             Controls.Add(footer);
 
             LoadFooter();
+            if (ctl.IsSimulated) _autostart.Enabled = false; // the demo must not touch the real startup entry
             _autostart.CheckedChanged += (s, e) =>
             {
                 if (_syncing) return;
@@ -178,13 +180,12 @@ namespace LinkPilot.App
             RefreshUi();
         }
 
-        private CheckBox Check(string text) => new CheckBox
+        private CheckBox Check(string text) => new DarkCheckBox
         {
             Text = text,
-            AutoSize = true,
             ForeColor = Theme.Text,
-            BackColor = Color.Transparent,
-            FlatStyle = FlatStyle.Flat,
+            BackColor = Theme.Card,
+            Font = Theme.Ui(9f),
             Margin = new Padding(0, Theme.S(2), 0, Theme.S(2)),
         };
 
@@ -249,7 +250,8 @@ namespace LinkPilot.App
             _coolantSrc.Text = snap.CoolantTemp.HasValue ? "coolant · " + snap.CoolantSource : "no coolant sensor";
             _pump.Text = snap.PumpRpm.HasValue ? $"pump {snap.PumpRpm.Value:N0} rpm" : "";
             _lockInfo.Text = snap.LockInfo;
-            if (_fullBlast.Checked != snap.FullBlast) SetFullBlast(snap.FullBlast);
+            // Compare with what was asked for, not the last reading, or a fresh click gets undone for a moment.
+            if (_fullBlast.Checked != _ctl.FullBlast) SetFullBlast(_ctl.FullBlast);
             LayoutHeader((Panel)_coolant.Parent);
 
             _alarm.Visible = snap.Alarm != null;
@@ -344,7 +346,9 @@ namespace LinkPilot.App
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             base.OnFormClosed(e);
-            if (e.CloseReason == CloseReason.UserClosing && !_exiting())
+            // Getting here means the window really closed (it wasn't hidden to the tray): the close button
+            // with "hides to tray" off, or Windows / Task Manager asking the app to end. Quit properly.
+            if (!_exiting())
             {
                 ExitRequested?.Invoke(this, EventArgs.Empty);
             }

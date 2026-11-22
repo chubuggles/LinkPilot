@@ -95,3 +95,5 @@ On Windows with the [.NET SDK](https://dotnet.microsoft.com/download), run `dotn
 
 `tests/ProtocolTests.cs` checks the parsers against real hub captures, then runs a full conversation and the whole control loop against a simulated hub (64 checks).
 To run it, go to `source\tests` and run `dotnet run -c Release`.
+
+To try the window without any hardware, run `LinkPilot.exe --demo`. It talks to a pretend hub (one pump, three fans), keeps its own settings in `%TEMP%\LinkPilot-demo`, and can run next to the real LinkPilot without disturbing it.

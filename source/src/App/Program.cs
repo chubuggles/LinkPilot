@@ -17,13 +17,20 @@ namespace LinkPilot.App
         private static void Main(string[] args)
         {
             bool startInTray = args.Any(a => a.Equals("--tray", StringComparison.OrdinalIgnoreCase));
+            // --demo: run against a pretend hub with its own settings folder, alongside (and never touching) the real one.
+            bool demo = args.Any(a => a.Equals("--demo", StringComparison.OrdinalIgnoreCase));
+            string suffix = demo ? ".Demo" : "";
+            if (demo)
+            {
+                Environment.SetEnvironmentVariable("LINKPILOT_DATA_DIR", System.IO.Path.Combine(System.IO.Path.GetTempPath(), "LinkPilot-demo"));
+            }
 
-            using (var single = new Mutex(true, InstanceMutex, out bool first))
+            using (var single = new Mutex(true, InstanceMutex + suffix, out bool first))
             {
                 if (!first)
                 {
                     // Already running: ask that copy to pop its window up, then bow out.
-                    try { using (var ev = EventWaitHandle.OpenExisting(ShowEvent)) ev.Set(); } catch { }
+                    try { using (var ev = EventWaitHandle.OpenExisting(ShowEvent + suffix)) ev.Set(); } catch { }
                     return;
                 }
 
@@ -32,11 +39,11 @@ namespace LinkPilot.App
                 Application.ThreadException += (s, e) => Log.Write("UI error: " + e.Exception);
                 AppDomain.CurrentDomain.UnhandledException += (s, e) => Log.Write("Fatal: " + e.ExceptionObject);
 
-                Log.Write("LinkPilot starting" + (startInTray ? " (tray)" : ""));
+                Log.Write("LinkPilot starting" + (startInTray ? " (tray)" : "") + (demo ? " (demo)" : ""));
                 var settings = AppSettings.Load();
-                Autostart.Repair();
-                using (var showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEvent))
-                using (var app = new TrayApp(settings, !startInTray, showSignal))
+                if (!demo) Autostart.Repair();
+                using (var showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEvent + suffix))
+                using (var app = new TrayApp(settings, !startInTray, showSignal, demo))
                 {
                     Application.Run(app);
                 }
@@ -59,9 +66,9 @@ namespace LinkPilot.App
         private bool _exiting;
         private Icon? _currentIcon;
 
-        public TrayApp(AppSettings settings, bool showWindow, EventWaitHandle showSignal)
+        public TrayApp(AppSettings settings, bool showWindow, EventWaitHandle showSignal, bool demo = false)
         {
-            _ctl = new Controller(settings);
+            _ctl = demo ? new Controller(settings, () => new LinkPilot.Hid.DemoHub()) : new Controller(settings);
 
             _iconOk = IconFactory.MakeIcon(32, Theme.Accent);
             _iconHot = IconFactory.MakeIcon(32, Theme.Danger);
@@ -79,7 +86,7 @@ namespace LinkPilot.App
             _tray = new NotifyIcon
             {
                 Icon = _iconOff,
-                Text = "LinkPilot",
+                Text = demo ? "LinkPilot (demo)" : "LinkPilot",
                 ContextMenuStrip = menu,
                 Visible = true,
             };
@@ -149,7 +156,7 @@ namespace LinkPilot.App
             }
             _tray.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip; // NotifyIcon limit
 
-            _blastItem.Checked = snap.FullBlast;
+            _blastItem.Checked = _ctl.FullBlast;
 
             while (_ctl.Notifications.TryDequeue(out var n))
             {

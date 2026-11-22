@@ -96,6 +96,9 @@ namespace LinkPilot.Core
             _transportFactory = transportFactory;
         }
 
+        /// <summary>True when talking to a pretend hub (tests and --demo) instead of USB.</summary>
+        public bool IsSimulated => _transportFactory != null;
+
         public bool FullBlast
         {
             get => _fullBlast;
