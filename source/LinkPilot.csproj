@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Windows rebuild: `dotnet build -c Release`. Produces a .NET Framework 4.8 WinForms exe (no extra runtime needed). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>LinkPilot</RootNamespace>
+    <AssemblyName>LinkPilot</AssemblyName>
+    <ApplicationManifest>src\app.manifest</ApplicationManifest>
+    <ApplicationIcon>src\App\LinkPilot.ico</ApplicationIcon>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src\**\*.cs" />
+    <Reference Include="System.Runtime.Serialization" />
+  </ItemGroup>
+</Project>
