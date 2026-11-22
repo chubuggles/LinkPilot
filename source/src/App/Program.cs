@@ -34,6 +34,7 @@ namespace LinkPilot.App
 
                 Log.Write("LinkPilot starting" + (startInTray ? " (tray)" : ""));
                 var settings = AppSettings.Load();
+                Autostart.Repair();
                 using (var showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEvent))
                 using (var app = new TrayApp(settings, !startInTray, showSignal))
                 {
@@ -114,6 +115,8 @@ namespace LinkPilot.App
             {
                 _form = new MainForm(_ctl, () => _exiting);
                 _form.FullBlastToggled += (s, e) => _blastItem.Checked = _ctl.FullBlast;
+                // "Close button hides to tray" is off, so the close button means quit.
+                _form.ExitRequested += (s, e) => { try { _invoker.BeginInvoke((Action)ExitApp); } catch { } };
             }
             _form.Show();
             if (_form.WindowState == FormWindowState.Minimized) _form.WindowState = FormWindowState.Normal;
@@ -202,6 +205,26 @@ namespace LinkPilot.App
                     return k?.GetValue(ValueName) is string s && s.Length > 0;
             }
             catch { return false; }
+        }
+
+        /// <summary>If LinkPilot.exe was moved, point the Windows startup entry at where it lives now.</summary>
+        public static void Repair()
+        {
+            try
+            {
+                using (var k = Registry.CurrentUser.OpenSubKey(RunKey, true))
+                {
+                    if (k?.GetValue(ValueName) is string s && s.Length > 0 && !s.Equals(Command, StringComparison.OrdinalIgnoreCase))
+                    {
+                        k.SetValue(ValueName, Command);
+                        Log.Write("Startup entry pointed at an old location; updated it to " + Application.ExecutablePath);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Couldn't check the startup entry: " + ex.Message);
+            }
         }
 
         public static bool Set(bool on)

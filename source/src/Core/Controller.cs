@@ -56,6 +56,8 @@ namespace LinkPilot.Core
         private const int RefreshDeviceListEveryMs = 30000;
         private const int StallTicksToAlarm = 3;
         private const int StallGraceMs = 8000;
+        private const int StatusEveryMs = 2000;
+        private const int HistoryEveryMs = 60000;
 
         private readonly AppSettings _settings;
         private readonly object _settingsLock = new object();
@@ -76,13 +78,22 @@ namespace LinkPilot.Core
         private bool _tempAlarm;
         private bool _stallAlarm;
         private volatile bool _fullBlast;
+        private DateTime _lastStatusWrite = DateTime.MinValue;
+        private DateTime _lastHistoryWrite = DateTime.MinValue;
+        private bool _lastStatusConnected;
+        private bool _statusErrorLogged;
 
-        public HubSnapshot Latest { get; private set; } = new HubSnapshot();
+        private volatile HubSnapshot _latest = new HubSnapshot();
+        public HubSnapshot Latest { get => _latest; private set => _latest = value; }
         public ConcurrentQueue<Notification> Notifications { get; } = new ConcurrentQueue<Notification>();
 
-        public Controller(AppSettings settings)
+        private readonly Func<IHidTransport>? _transportFactory;
+
+        /// <param name="transportFactory">Tests pass a simulated hub here; the app leaves it null and uses USB.</param>
+        public Controller(AppSettings settings, Func<IHidTransport>? transportFactory = null)
         {
             _settings = settings;
+            _transportFactory = transportFactory;
         }
 
         public bool FullBlast
@@ -132,6 +143,7 @@ namespace LinkPilot.Core
             {
                 int interval = Read(s => s.PollIntervalMs);
                 SaveIfDirty();
+                PublishFiles();
                 try
                 {
                     if (_hub == null)
@@ -174,6 +186,44 @@ namespace LinkPilot.Core
             }
         }
 
+        /// <summary>
+        /// Keeps status.json (the live state) and history.csv (one line a minute) up to date,
+        /// so scripts and AI assistants can read the loop without talking to the hub.
+        /// </summary>
+        private void PublishFiles()
+        {
+            var now = DateTime.UtcNow;
+            var snap = Latest;
+            try
+            {
+                if (snap.Connected != _lastStatusConnected || (now - _lastStatusWrite).TotalMilliseconds >= StatusEveryMs)
+                {
+                    StatusFile.Write(Read(s => StatusFile.Build(snap, s, true, DateTimeOffset.Now)));
+                    _lastStatusWrite = now;
+                    _lastStatusConnected = snap.Connected;
+                }
+                if ((now - _lastHistoryWrite).TotalMilliseconds >= HistoryEveryMs)
+                {
+                    var row = StatusFile.HistoryRow(snap, DateTimeOffset.Now);
+                    if (row != null)
+                    {
+                        StatusFile.AppendHistory(row);
+                        _lastHistoryWrite = now;
+                    }
+                }
+                _statusErrorLogged = false;
+            }
+            catch (Exception ex)
+            {
+                // Never let a locked or read-only file get in the way of fan control.
+                if (!_statusErrorLogged)
+                {
+                    _statusErrorLogged = true;
+                    Log.Write("Couldn't write the status files: " + ex.Message);
+                }
+            }
+        }
+
         private void WaitOrStop(int ms)
         {
             WaitHandle.WaitAny(new WaitHandle[] { _stop, _wake }, ms);
@@ -181,6 +231,11 @@ namespace LinkPilot.Core
 
         private bool TryConnect()
         {
+            if (_transportFactory != null)
+            {
+                return Attach(_transportFactory, "simulated hub");
+            }
+
             var pids = new List<ushort> { LinkHub.SystemHubProductId };
             foreach (var extra in Read(s => s.ExtraHubProductIds.ToList()))
             {
@@ -213,10 +268,15 @@ namespace LinkPilot.Core
                 return false;
             }
 
+            return Attach(() => HidDevice.Open(candidate), candidate.ToString());
+        }
+
+        private bool Attach(Func<IHidTransport> open, string description)
+        {
             LinkHub? hub = null;
             try
             {
-                var hid = HidDevice.Open(candidate);
+                var hid = open();
                 bool debug = Read(s => s.DebugPacketLog);
                 hub = new LinkHub(hid, _guard, debug ? (Action<string>)(m => Log.Write(m)) : null);
                 hub.Initialize();
@@ -225,7 +285,7 @@ namespace LinkPilot.Core
                 _lastWritten.Clear();
                 _applied.Clear();
                 _stallTicks.Clear();
-                Log.Write($"Connected: {candidate} firmware {hub.Firmware}");
+                Log.Write($"Connected: {description} firmware {hub.Firmware}");
                 RefreshDeviceList();
                 return true;
             }
@@ -568,6 +628,14 @@ namespace LinkPilot.Core
                 }
                 hub.Dispose();
             }
+
+            try
+            {
+                var stopped = new HubSnapshot { Connected = false, Status = "LinkPilot is not running", LockInfo = _guard.Description };
+                StatusFile.Write(Read(s => StatusFile.Build(stopped, s, false, DateTimeOffset.Now)));
+            }
+            catch { }
+
             _guard.Dispose();
         }
     }

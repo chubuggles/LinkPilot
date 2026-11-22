@@ -61,7 +61,17 @@ namespace LinkPilot.Core
             PumpStallRpm = 300;
         }
 
-        public static string Folder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LinkPilot");
+        /// <summary>%APPDATA%\LinkPilot, unless the LINKPILOT_DATA_DIR environment variable points somewhere else (used by the tests).</summary>
+        public static string Folder
+        {
+            get
+            {
+                var custom = Environment.GetEnvironmentVariable("LINKPILOT_DATA_DIR");
+                return !string.IsNullOrWhiteSpace(custom)
+                    ? custom!
+                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LinkPilot");
+            }
+        }
         public static string FilePath => Path.Combine(Folder, "settings.json");
 
         public static AppSettings Load()
@@ -90,18 +100,8 @@ namespace LinkPilot.Core
         {
             try
             {
-                Directory.CreateDirectory(Folder);
-                var tmp = FilePath + ".tmp";
-                using (var ms = new MemoryStream())
-                {
-                    using (var w = JsonReaderWriterFactory.CreateJsonWriter(ms, Encoding.UTF8, false, true, "  "))
-                    {
-                        new DataContractJsonSerializer(typeof(AppSettings)).WriteObject(w, this);
-                    }
-                    File.WriteAllBytes(tmp, ms.ToArray());
-                }
-                if (File.Exists(FilePath)) File.Delete(FilePath);
-                File.Move(tmp, FilePath);
+                // Swapped in as one step, so a crash mid-save can't leave you with no settings file.
+                AtomicFile.WriteJson(FilePath, this);
             }
             catch (Exception ex)
             {

@@ -1,4 +1,4 @@
-LinkPilot.exe
-source/out/
-source/bin/
-source/obj/
+/LinkPilot.exe
+out/
+bin/
+obj/

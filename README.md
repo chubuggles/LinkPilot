@@ -7,6 +7,7 @@ Lighting stays with **SignalRGB**. LinkPilot never touches RGB.
 - Per-device **Fixed %** or **Curve** (drag-the-dots editor), driven by your loop's coolant sensor by default
 - Window + **system tray** (left-click to open; right-click for Full blast / Exit)
 - Starts with Windows (optional), runs as a normal user (no admin)
+- Writes a live `status.json` and a minute-by-minute `history.csv` that scripts and AI assistants can read
 - No installer and no dependencies: one `.exe` on the .NET Framework 4.8 that ships with Windows 10/11
 
 ## Quick start
@@ -19,6 +20,23 @@ Lighting stays with **SignalRGB**. LinkPilot never touches RGB.
 5. Your pump(s) and fans show up. Set each one to **Fixed %** or **Curve**, and you're done.
 
 Settings and log live in `%APPDATA%\LinkPilot\` (there's a link in the app footer).
+
+The close button follows the **Close button hides to tray** box in the footer: ticked, the window hides and LinkPilot keeps running; unticked, closing the window quits LinkPilot.
+If you move `LinkPilot.exe`, just run it once from its new place and it fixes its own Start with Windows entry.
+
+## Reading it from a script or an AI assistant
+
+LinkPilot keeps two plain files in `%APPDATA%\LinkPilot\`. Reading them never touches the hub.
+
+| File | What's in it |
+|---|---|
+| `status.json` | The state right now, rewritten every 2 seconds: coolant temperature, pump RPM, alarms, your safety settings, and for every device its port, name, RPM, temperature, speed %, mode and curve. Also the last 25 log lines. |
+| `history.csv` | One line a minute: time, coolant °C, pump RPM and %, average fan RPM and %, highest fan %, and any alarm. Starts a fresh file at about 2 MB (the old one becomes `history.old.csv`). |
+
+`status.json` has `Updated` (local time) and `Running`. If `Running` is `true` but `Updated` is more than a few seconds old, LinkPilot has stopped without a clean exit.
+A clean exit writes `Running: false`.
+
+To let an assistant such as Claude check on your loop, point it at that folder and ask, for example, "read LinkPilot's status.json and tell me how the loop is doing".
 
 ## Safety features (it's a pump, so these matter)
 
@@ -75,4 +93,5 @@ Not affiliated with Corsair.
 The included exe was compiled with Roslyn against the .NET Framework 4.8 reference assemblies (`build/compile.sh`).
 On Windows with the [.NET SDK](https://dotnet.microsoft.com/download), run `dotnet build -c Release` inside the `source` folder.
 
-`tests/ProtocolTests.cs` checks the parsers against real hub captures and runs a full conversation against a simulated hub (40 checks).
+`tests/ProtocolTests.cs` checks the parsers against real hub captures, then runs a full conversation and the whole control loop against a simulated hub (64 checks).
+To run it, go to `source\tests` and run `dotnet run -c Release`.

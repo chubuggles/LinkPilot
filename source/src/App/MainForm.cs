@@ -24,6 +24,8 @@ namespace LinkPilot.App
         private bool _syncing;
 
         public event EventHandler? FullBlastToggled;
+        /// <summary>Raised when the user closes the window and it isn't set to hide to the tray.</summary>
+        public event EventHandler? ExitRequested;
 
         public MainForm(Controller ctl, Func<bool> exiting)
         {
@@ -337,6 +339,15 @@ namespace LinkPilot.App
                 return;
             }
             base.OnFormClosing(e);
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            base.OnFormClosed(e);
+            if (e.CloseReason == CloseReason.UserClosing && !_exiting())
+            {
+                ExitRequested?.Invoke(this, EventArgs.Empty);
+            }
         }
 
         protected override void Dispose(bool disposing)

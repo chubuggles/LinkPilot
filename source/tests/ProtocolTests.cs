@@ -17,6 +17,12 @@ public static class ProtocolTests
         if (cond) { _pass++; } else { _fail++; Console.WriteLine("FAIL: " + what); }
     }
 
+    static void WaitFor(Func<bool> cond, int timeoutMs)
+    {
+        var until = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (!cond() && DateTime.UtcNow < until) System.Threading.Thread.Sleep(50);
+    }
+
     static byte[] H(string hex)
     {
         var b = new byte[hex.Length / 2];
@@ -128,6 +134,112 @@ public static class ProtocolTests
             Check(back.PumpMinimumPercent == 50 && back.AlarmCoolantTemp == 45 && back.Find("x")!.Curve.Count == 5, "old/partial settings get safe defaults");
         }
 
+        // --- status file (what scripts and AI assistants read)
+        var snap = new HubSnapshot
+        {
+            Connected = true,
+            Status = "Connected · 3 LINK devices",
+            Firmware = "4.1.656",
+            CoolantTemp = 31.26,
+            CoolantSource = "XD6 Pump/Res",
+            PumpRpm = 2100,
+            Channels = new List<ChannelState>
+            {
+                new ChannelState { Channel = 2, DeviceId = "fanA", Model = LinkModels.Lookup(0x02), Rpm = 800, Controllable = true, AppliedPercent = 40, DriverNote = "Curve @ 31.3°C", DisplayName = "Top fan" },
+                new ChannelState { Channel = 1, DeviceId = "pump", Model = LinkModels.Lookup(0x19), Rpm = 2100, Temp = 31.26, Controllable = true, AppliedPercent = 30, DriverNote = "Fixed", DisplayName = "XD6 Pump/Res" },
+                new ChannelState { Channel = 3, DeviceId = "fanB", Model = LinkModels.Lookup(0x02), Rpm = 1000, Controllable = true, AppliedPercent = 60, DriverNote = "Curve @ 31.3°C", DisplayName = "LX RGB Fan" },
+            },
+        };
+        var cfg = new AppSettings { PumpMinimumPercent = 20 };
+        cfg.Channels.Add(new ChannelSettings { DeviceId = "pump", Mode = ControlMode.Fixed, FixedPercent = 30, Curve = Curves.BalancedPump() });
+        cfg.Channels.Add(new ChannelSettings { DeviceId = "fanA", Mode = ControlMode.Curve, Curve = Curves.QuietFan() });
+        var when = new DateTimeOffset(2026, 11, 22, 9, 30, 0, TimeSpan.FromHours(-7));
+
+        var doc = StatusFile.Build(snap, cfg, true, when);
+        Check(doc.Updated == "2026-11-22T09:30:00-07:00", "status timestamp format (got " + doc.Updated + ")");
+        Check(doc.Running && doc.Connected && doc.CoolantC == 31.3 && doc.PumpRpm == 2100 && doc.PumpMinimumPercent == 20, "status header values");
+        Check(doc.Devices.Count == 3 && doc.Devices[0].Port == 1 && doc.Devices[0].Kind == "Pump", "status devices sorted by port");
+        Check(doc.Devices[0].Mode == "Fixed" && doc.Devices[0].FixedPercent == 30 && doc.Devices[0].AppliedPercent == 30 && doc.Devices[0].TempC == 31.3, "status pump details");
+        Check(doc.Devices[1].Mode == "Curve" && doc.Devices[1].Curve!.Count == 5 && doc.Devices[1].Name == "Top fan", "status fan details");
+        Check(doc.Devices[2].Mode == null && doc.Devices[2].Curve == null, "status device with no saved settings");
+
+        var statusPath = Path.Combine(Path.GetTempPath(), "lp-status-test.json");
+        File.Delete(statusPath);
+        StatusFile.Write(doc, statusPath);
+        StatusFile.Write(doc, statusPath); // second write replaces an existing file
+        using (var fs = File.OpenRead(statusPath))
+        {
+            var back = (StatusDoc)new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(StatusDoc)).ReadObject(fs);
+            Check(back.Devices.Count == 3 && back.Devices[1].Rpm == 800 && back.Devices[2].TempC == null && back.Firmware == "4.1.656", "status json round trip");
+        }
+        Check(!File.Exists(statusPath + ".tmp"), "status write leaves no temp file");
+        File.Delete(statusPath);
+
+        var row = StatusFile.HistoryRow(snap, when);
+        Check(row == "2026-11-22T09:30:00-07:00,31.3,2100,30,900,50,60,", "history row (got " + row + ")");
+        Check(StatusFile.HistoryRow(new HubSnapshot(), when) == null, "no history row while disconnected");
+        var histPath = Path.Combine(Path.GetTempPath(), "lp-history-test.csv");
+        File.Delete(histPath);
+        StatusFile.AppendHistory(row!, histPath);
+        StatusFile.AppendHistory(row!, histPath);
+        var hist = File.ReadAllLines(histPath);
+        Check(hist.Length == 3 && hist[0] == StatusFile.HistoryHeader && hist[2] == row, "history file has a header then rows");
+        File.Delete(histPath);
+
+        var stopped = StatusFile.Build(new HubSnapshot { Connected = false, Status = "LinkPilot is not running" }, cfg, false, when);
+        Check(!stopped.Running && !stopped.Connected && stopped.Devices.Count == 0 && stopped.CoolantC == null, "stopped status");
+
+        // --- the whole control loop against the simulated hub, writing its files to a scratch folder
+        var dataDir = Path.Combine(Path.GetTempPath(), "lp-loop-test-" + Guid.NewGuid().ToString("N"));
+        Environment.SetEnvironmentVariable("LINKPILOT_DATA_DIR", dataDir);
+        try
+        {
+            var loopHub = new FakeHub(v);
+            var loopCfg = new AppSettings { PollIntervalMs = 500, PumpMinimumPercent = 50 };
+            var ctl = new Controller(loopCfg, () => loopHub);
+            ctl.Start();
+            WaitFor(() => ctl.Latest.Connected && loopHub.LastWriteBody != null, 6000);
+            Check(ctl.Latest.Connected && ctl.Latest.Channels.Count == 3, "loop connects and lists devices");
+            Check(loopHub.LastWriteBody != null, "loop writes speeds to the hub");
+            var loopPump = ctl.Latest.Channels.FirstOrDefault(x => x.Channel == 1);
+            Check(loopPump != null && loopPump.Model.Kind == LinkKind.Pump && loopPump.AppliedPercent >= 50, "loop keeps the pump at or above its floor");
+            Check(ctl.Latest.CoolantTemp.HasValue, "loop finds a coolant temperature");
+
+            int modeCallsBefore = loopHub.SoftwareModeCount;
+            loopHub.FailNextWithWrongMode = true;
+            WaitFor(() => loopHub.SoftwareModeCount > modeCallsBefore, 5000);
+            Check(loopHub.SoftwareModeCount > modeCallsBefore, "loop retakes software mode after another app drops it");
+            System.Threading.Thread.Sleep(1200);
+            Check(ctl.Latest.Connected, "loop stays connected after the mode drop");
+
+            ctl.Edit(x => { var p = x.Find(loopPump!.DeviceId); if (p != null) { p.Mode = ControlMode.Fixed; p.FixedPercent = 10; } });
+            System.Threading.Thread.Sleep(1500);
+            Check(ctl.Latest.Channels.First(x => x.Channel == 1).AppliedPercent >= 50, "a fixed pump speed below the floor is raised to the floor");
+
+            WaitFor(() => File.Exists(Path.Combine(dataDir, "status.json")) && File.Exists(Path.Combine(dataDir, "history.csv")), 5000);
+            StatusDoc live;
+            using (var fs = File.OpenRead(Path.Combine(dataDir, "status.json")))
+            {
+                live = (StatusDoc)new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(StatusDoc)).ReadObject(fs);
+            }
+            Check(live.Running && live.Connected && live.Devices.Count == 3 && live.RecentLog.Count > 0, "loop publishes status.json");
+            Check(File.ReadAllLines(Path.Combine(dataDir, "history.csv")).Length >= 2, "loop publishes history.csv");
+            Check(File.Exists(Path.Combine(dataDir, "settings.json")), "loop saves settings for newly found devices");
+
+            ctl.Dispose();
+            Check(loopHub.HardwareModeRequested, "exit hands the hub back to hardware mode");
+            using (var fs = File.OpenRead(Path.Combine(dataDir, "status.json")))
+            {
+                live = (StatusDoc)new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(StatusDoc)).ReadObject(fs);
+            }
+            Check(!live.Running && !live.Connected, "exit marks status.json as not running");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("LINKPILOT_DATA_DIR", null);
+            try { Directory.Delete(dataDir, true); } catch { }
+        }
+
         Console.WriteLine($"{_pass} passed, {_fail} failed");
         return _fail == 0 ? 0 : 1;
     }
@@ -141,8 +253,10 @@ public static class ProtocolTests
         int _deviceReads;
         int _openCount;
         public bool SoftwareModeRequested;
-        public byte[]? LastWriteBody;
-        public bool FailNextWithWrongMode;
+        public bool HardwareModeRequested;
+        public volatile int SoftwareModeCount;
+        public volatile byte[]? LastWriteBody;
+        public volatile bool FailNextWithWrongMode;
         public bool EndpointBalanced => _openCount == 0;
 
         public FakeHub(byte[][] v) { _v = v; }
@@ -168,7 +282,12 @@ public static class ProtocolTests
             if (FailNextWithWrongMode) { FailNextWithWrongMode = false; _out.Enqueue(Report(new byte[] { 0, 0, 0, 0x03 })); return; }
 
             if (c0 == 0x02 && c1 == 0x13) { _out.Enqueue(Report(_v[10])); return; }
-            if (c0 == 0x01 && c1 == 0x03) { SoftwareModeRequested |= report[6] == 0x02; _out.Enqueue(Ok()); return; }
+            if (c0 == 0x01 && c1 == 0x03) {
+                if (report[6] == 0x02) { SoftwareModeRequested = true; SoftwareModeCount++; }
+                if (report[6] == 0x01) HardwareModeRequested = true;
+                _out.Enqueue(Ok());
+                return;
+            }
             if (c0 == 0x0d && c1 == 0x01) { _openEp = report[5]; _deviceReads = 0; _openCount++; _out.Enqueue(Ok()); return; }
             if (c0 == 0x05 && c1 == 0x01 && report[5] == 0x01)
             {
