@@ -14,7 +14,7 @@ Lighting stays with **SignalRGB**. LinkPilot never touches RGB.
 1. **Fully quit iCUE.** Right-click its tray icon → Quit. Then in `services.msc`, stop **Corsair Service** and set it to *Manual*. iCUE and LinkPilot will fight over the hub if both run.
 2. In **SignalRGB**, turn **off its Fan Control** feature (Settings). Keep SignalRGB for lighting only.
 3. Don't run FanControl's CorsairLink plugin at the same time (it does the same job).
-4. Put `LinkPilot.exe` somewhere permanent (e.g. `C:\Tools\LinkPilot\`) and run it.
+4. Download the zip from the [latest release](https://github.com/chubuggles/LinkPilot/releases/latest) and unzip it. Put `LinkPilot.exe` somewhere permanent (e.g. `C:\Tools\LinkPilot\`) and run it.
    *Windows SmartScreen may say "Windows protected your PC" because the exe isn't code-signed. Click **More info → Run anyway**.*
 5. Your pump(s) and fans show up. Set each one to **Fixed %** or **Curve**, and you're done.
 

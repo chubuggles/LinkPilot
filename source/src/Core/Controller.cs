@@ -151,7 +151,7 @@ namespace LinkPilot.Core
                 }
                 catch (LinkCommandException ex) when (ex.StatusCode == LinkProtocol.StatusWrongMode)
                 {
-                    Log.Write("Hub left software mode (another app switched it?). Taking it back.");
+                    Log.Write("Hub left software mode. This is normal when SignalRGB starts or closes. Taking it back.");
                     SafeCall(() => _hub?.EnterSoftwareMode());
                     _lastWritten.Clear();
                 }
